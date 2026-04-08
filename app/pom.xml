@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+             https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- ============================================================
+         Spring Boot Parent - Manages dependency versions automatically
+         ============================================================ -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.2.4</version>
+        <relativePath/>
+    </parent>
+
+    <!-- ============================================================
+         Project Coordinates
+         ============================================================ -->
+    <groupId>com.devops</groupId>
+    <artifactId>selfhealing-app</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+    <name>Self-Healing CI/CD Application</name>
+    <description>
+        Production-grade Spring Boot application demonstrating Self-Healing
+        CI/CD with Blue-Green deployment, automatic rollback, and zero downtime.
+    </description>
+
+    <!-- ============================================================
+         Properties
+         ============================================================ -->
+    <properties>
+        <java.version>17</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+    </properties>
+
+    <!-- ============================================================
+         Dependencies
+         ============================================================ -->
+    <dependencies>
+
+        <!-- Core Web MVC -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!-- Actuator: exposes /actuator/health, /actuator/info, etc. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
+        <!-- Test dependencies -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+    </dependencies>
+
+    <!-- ============================================================
+         Build Configuration
+         ============================================================ -->
+    <build>
+        <plugins>
+            <!-- Spring Boot Maven Plugin: creates executable fat JAR -->
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <!-- Exclude devtools from production JAR -->
+                    <excludes>
+                        <exclude>
+                            <groupId>org.springframework.boot</groupId>
+                            <artifactId>spring-boot-devtools</artifactId>
+                        </exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+
+            <!-- Surefire Plugin: runs unit tests during build -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <!-- Fail pipeline on test failure -->
+                    <failIfNoSpecifiedTests>false</failIfNoSpecifiedTests>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

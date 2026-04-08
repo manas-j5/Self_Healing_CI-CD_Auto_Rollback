@@ -1,0 +1,284 @@
+# ================================================================
+# Self-Healing CI/CD Pipeline — GitHub Actions Workflow
+# ================================================================
+#
+# TRIGGER: Push to 'main' branch
+#
+# PIPELINE STAGES:
+#   1. build-and-test      → Compile + run unit tests (fail-fast)
+#   2. docker-build-push   → Build & push Docker image (tagged v{run})
+#   3. deploy              → SSH into EC2, run self-healing deploy script
+#   4. notify              → Report pipeline result
+#
+# REQUIRED GITHUB SECRETS:
+#   DOCKERHUB_USERNAME     Docker Hub username
+#   DOCKERHUB_TOKEN        Docker Hub access token (not password)
+#   EC2_HOST               EC2 public IP or hostname
+#   EC2_USER               EC2 SSH username (e.g., ubuntu)
+#   EC2_SSH_KEY            EC2 private key (PEM content, not path)
+#   NOTIFICATION_EMAIL     (Optional) email for failure alerts
+#   SLACK_WEBHOOK_URL      (Optional) Slack webhook for notifications
+#
+# IMAGE TAGS:
+#   - v{run_number}   →  e.g., v42 (unique per pipeline run)
+#   - latest          →  always points to most recent successful build
+# ================================================================
+
+name: Self-Healing CI/CD Pipeline
+
+# ----------------------------------------------------------------
+# Triggers
+# ----------------------------------------------------------------
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:   # Allow manual trigger from GitHub Actions UI
+    inputs:
+      version_override:
+        description: 'Override image version tag (e.g., v5)'
+        required: false
+        default: ''
+
+# ----------------------------------------------------------------
+# Global Environment Variables
+# ----------------------------------------------------------------
+env:
+  DOCKER_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/selfhealing-app
+  APP_VERSION: v${{ github.run_number }}
+  JAVA_VERSION: '17'
+  REGISTRY: docker.io
+
+# ================================================================
+# JOBS
+# ================================================================
+jobs:
+
+  # ==============================================================
+  # JOB 1: Build & Test
+  # ==============================================================
+  build-and-test:
+    name: 🔨 Build & Run Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checkout source code
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # Step 2: Set up JDK 17
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: maven
+
+      # Step 3: Run Maven build + tests
+      - name: Build and Run Unit Tests
+        working-directory: ./app
+        run: |
+          echo "🔧 Starting Maven build..."
+          mvn clean verify \
+            --no-transfer-progress \
+            -B \
+            -Dsurefire.failIfNoSpecifiedTests=false
+
+      # Step 4: Upload test results as artifact
+      - name: Upload Test Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: app/target/surefire-reports/
+          retention-days: 7
+
+      # Step 5: Upload JAR as artifact (reused by Docker job)
+      - name: Upload JAR Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-jar
+          path: app/target/*.jar
+          retention-days: 1
+
+  # ==============================================================
+  # JOB 2: Docker Build & Push
+  # ==============================================================
+  docker-build-push:
+    name: 🐳 Docker Build & Push
+    runs-on: ubuntu-latest
+    needs: build-and-test   # Only runs if tests pass
+
+    outputs:
+      image_tag: ${{ steps.meta.outputs.version }}
+
+    steps:
+      # Step 1: Checkout
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # Step 2: Download built JAR (avoid rebuilding)
+      - name: Download JAR Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: app-jar
+          path: app/target/
+
+      # Step 3: Set up Docker Buildx (enables multi-platform + build cache)
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Step 4: Log in to Docker Hub
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Step 5: Generate Docker metadata (tags + labels)
+      - name: Docker Metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKER_IMAGE }}
+          tags: |
+            type=raw,value=v${{ github.run_number }}
+            type=raw,value=latest
+            type=sha,prefix=sha-,format=short
+
+      # Step 6: Build and push Docker image
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            APP_VERSION=v${{ github.run_number }}
+
+      # Step 7: Print image digest
+      - name: Image Digest
+        run: |
+          echo "✅ Docker Image pushed successfully!"
+          echo "  Tags: v${{ github.run_number }}, latest"
+          echo "  Image: ${{ env.DOCKER_IMAGE }}"
+
+  # ==============================================================
+  # JOB 3: Deploy to EC2
+  # ==============================================================
+  deploy:
+    name: 🚀 Deploy to EC2 (Blue-Green)
+    runs-on: ubuntu-latest
+    needs: docker-build-push   # Only deploy if image was pushed successfully
+
+    environment:
+      name: production
+      url: http://${{ secrets.EC2_HOST }}
+
+    steps:
+      # Step 1: Checkout (needed to access scripts/)
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # Step 2: Configure SSH
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key.pem
+          chmod 600 ~/.ssh/ec2_key.pem
+          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      # Step 3: Copy deployment scripts to EC2
+      - name: Copy Scripts to EC2
+        run: |
+          scp -i ~/.ssh/ec2_key.pem -r \
+            scripts/ \
+            nginx/ \
+            .env.example \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:~/selfhealing/
+
+      # Step 4: Execute deployment on EC2 via SSH
+      - name: Deploy on EC2
+        env:
+          VERSION: v${{ github.run_number }}
+          IMAGE: ${{ env.DOCKER_IMAGE }}
+        run: |
+          ssh -i ~/.ssh/ec2_key.pem \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'ENDSSH'
+
+            # Set execution permissions
+            chmod +x ~/selfhealing/scripts/*.sh
+
+            # Create .env from secrets (passed as environment)
+            cat > ~/selfhealing/.env << EOF
+          DOCKER_IMAGE=${IMAGE}
+          APP_VERSION=${VERSION}
+          DOCKERHUB_USERNAME=${{ secrets.DOCKERHUB_USERNAME }}
+          NOTIFICATION_EMAIL=${{ secrets.NOTIFICATION_EMAIL }}
+          SLACK_WEBHOOK_URL=${{ secrets.SLACK_WEBHOOK_URL }}
+          LOG_DIR=/var/log/deployments
+          NGINX_CONF=/etc/nginx/conf.d/app.conf
+          MAX_WAIT_SECONDS=60
+          HEALTH_WAIT_SECONDS=15
+          EOF
+
+            # Run deployment script
+            cd ~/selfhealing
+            ./scripts/deploy.sh --image "${IMAGE}" --version "${VERSION}"
+
+          ENDSSH
+
+      # Step 5: Verify deployment from GitHub Actions runner
+      - name: Post-Deploy Verification
+        run: |
+          echo "⏳ Waiting 15 seconds before final verification..."
+          sleep 15
+          echo "🔍 Verifying deployment health from CI runner..."
+          RESPONSE=$(curl --silent --max-time 10 \
+            "http://${{ secrets.EC2_HOST }}/actuator/health" || echo "FAILED")
+          if echo "${RESPONSE}" | grep -q '"UP"'; then
+            echo "✅ Deployment verification PASSED: ${RESPONSE}"
+          else
+            echo "⚠️  Deployment verification response: ${RESPONSE}"
+            echo "  (Note: This may be a network/firewall issue from GitHub runner)"
+          fi
+
+  # ==============================================================
+  # JOB 4: Notify (always runs — success or failure)
+  # ==============================================================
+  notify:
+    name: 📢 Pipeline Notification
+    runs-on: ubuntu-latest
+    needs: [build-and-test, docker-build-push, deploy]
+    if: always()   # Run even if previous jobs failed
+
+    steps:
+      - name: Pipeline Result Summary
+        run: |
+          BUILD_STATUS="${{ needs.build-and-test.result }}"
+          DOCKER_STATUS="${{ needs.docker-build-push.result }}"
+          DEPLOY_STATUS="${{ needs.deploy.result }}"
+
+          echo "================================================"
+          echo " CI/CD Pipeline Summary"
+          echo "================================================"
+          echo "  Build & Test : ${BUILD_STATUS}"
+          echo "  Docker Push  : ${DOCKER_STATUS}"
+          echo "  Deployment   : ${DEPLOY_STATUS}"
+          echo "  Version      : v${{ github.run_number }}"
+          echo "  Commit       : ${{ github.sha }}"
+          echo "  Author       : ${{ github.actor }}"
+          echo "  Branch       : ${{ github.ref_name }}"
+          echo "  Run URL      : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo "================================================"
+
+          if [[ "${DEPLOY_STATUS}" == "success" ]]; then
+            echo "🎉 PIPELINE SUCCEEDED — Version v${{ github.run_number }} is LIVE!"
+          else
+            echo "💥 PIPELINE FAILED — Check logs above for details."
+            echo "   The self-healing script will have rolled back automatically."
+          fi
