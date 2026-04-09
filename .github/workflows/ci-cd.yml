@@ -177,7 +177,7 @@ jobs:
 
     environment:
       name: production
-      url: http://${{ secrets.EC2_HOST }}
+      
 
     steps:
       # Step 1: Checkout (needed to access scripts/)
