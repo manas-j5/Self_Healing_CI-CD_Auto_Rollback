@@ -44,7 +44,7 @@ on:
 # Global Environment Variables
 # ----------------------------------------------------------------
 env:
-  DOCKER_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/selfhealing-app
+  DOCKER_IMAGE: arsalankhan07/selfhealing-app
   APP_VERSION: v${{ github.run_number }}
   JAVA_VERSION: '17'
   REGISTRY: docker.io
