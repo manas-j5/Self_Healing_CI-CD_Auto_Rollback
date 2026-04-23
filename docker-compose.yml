@@ -1,39 +1,13 @@
-# ================================================================
-# docker-compose.yml — Local Development & Testing
-# ================================================================
-#
-# Runs the full Blue-Green stack locally for testing:
-#   - Blue container  : selfhealing-blue  → Port 8080
-#   - Green container : selfhealing-green → Port 8081
-#   - Nginx           : selfhealing-nginx → Port 80
-#
-# Usage:
-#   # Build and start everything
-#   docker compose up --build -d
-#
-#   # View logs
-#   docker compose logs -f app-blue
-#
-#   # Test health
-#   curl http://localhost:8080/actuator/health
-#   curl http://localhost:8081/actuator/health
-#   curl http://localhost/actuator/health   ← via Nginx
-#
-#   # Stop everything
-#   docker compose down
-# ================================================================
-
-version: "3.9"
-
 services:
 
-  # ---- Build the app image ----
+  # -------------------------------
+  # BLUE APP (Primary)
+  # -------------------------------
   app-blue:
     container_name: selfhealing-8080
     build:
       context: .
       dockerfile: docker/Dockerfile
-    image: selfhealing-app:local
     ports:
       - "8080:8080"
     environment:
@@ -42,23 +16,20 @@ services:
       JAVA_OPTS: "-Xms128m -Xmx256m"
     volumes:
       - app-logs:/var/log/app
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider",
-             "http://localhost:8080/actuator/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
     restart: unless-stopped
     networks:
       - selfhealing-net
 
+  # -------------------------------
+  # GREEN APP (Secondary)
+  # -------------------------------
   app-green:
     container_name: selfhealing-8081
-    image: selfhealing-app:local
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
     depends_on:
-      app-blue:
-        condition: service_healthy
+      - app-blue
     ports:
       - "8081:8080"
     environment:
@@ -67,17 +38,13 @@ services:
       JAVA_OPTS: "-Xms128m -Xmx256m"
     volumes:
       - app-logs:/var/log/app
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider",
-             "http://localhost:8080/actuator/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
     restart: unless-stopped
     networks:
       - selfhealing-net
 
+  # -------------------------------
+  # NGINX (Frontend + Proxy)
+  # -------------------------------
   nginx:
     container_name: selfhealing-nginx
     image: nginx:1.25-alpine
@@ -85,7 +52,8 @@ services:
       - "80:80"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/app.conf:/etc/nginx/conf.d/app.conf:ro
+      - ./nginx/app.conf:/etc/nginx/conf.d/default.conf:ro   # 🔥 IMPORTANT FIX
+      - ./nginx/html:/usr/share/nginx/html                  # 🔥 frontend here
       - nginx-logs:/var/log/nginx
     depends_on:
       - app-blue
@@ -93,18 +61,16 @@ services:
     networks:
       - selfhealing-net
 
-# ----------------------------------------------------------------
-# Volumes
-# ----------------------------------------------------------------
+# -------------------------------
+# VOLUMES
+# -------------------------------
 volumes:
   app-logs:
-    driver: local
   nginx-logs:
-    driver: local
 
-# ----------------------------------------------------------------
-# Networks
-# ----------------------------------------------------------------
+# -------------------------------
+# NETWORK
+# -------------------------------
 networks:
   selfhealing-net:
     driver: bridge
