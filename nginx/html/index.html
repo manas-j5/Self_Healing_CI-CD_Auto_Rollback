@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>CI/CD Dashboard</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="container">
+  <h1>🚀 CI/CD Pipeline Dashboard</h1>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Status</h2>
+      <p id="status" class="badge">Loading...</p>
+    </div>
+
+    <div class="card">
+      <h2>Version</h2>
+      <p id="version">--</p>
+    </div>
+
+    <div class="card">
+      <h2>Deployment Time</h2>
+      <p id="time">--</p>
+    </div>
+
+    <div class="card">
+      <h2>Health</h2>
+      <progress id="health" value="0" max="100"></progress>
+    </div>
+  </div>
+
+  <p>Last Updated: <span id="updated">--</span></p>
+  <p class="footer">Auto-refresh every 5 seconds 🔄</p>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
